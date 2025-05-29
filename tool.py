@@ -8,22 +8,22 @@ import io
 def compute_ahp_weights(matrix: np.ndarray):
     geom_means = np.prod(matrix, axis=1) ** (1.0 / matrix.shape[1])
     weights = geom_means / geom_means.sum()
-    return weights
+    return geom_means, weights
 
 
 def consistency_ratio(matrix: np.ndarray, weights: np.ndarray):
     n = matrix.shape[0]
     lamda_max = np.sum(np.dot(matrix, weights) / weights) / n
-    ci = (lamda_max - n) / (n - 1)
+    ci = (lamda_max - n) / (n - 1) if n > 1 else 0
     RI_dict = {1:0.0, 2:0.0, 3:0.58, 4:0.90, 5:1.12, 6:1.24, 7:1.32, 8:1.41, 9:1.45, 10:1.49}
     ri = RI_dict.get(n, 1.49)
     cr = ci / ri if ri != 0 else 0
-    return ci, cr, lamda_max
+    return lamda_max, ci, cr
 
 # Streamlit App
 
 def main():
-    st.title("AHP Multi-Lot Evaluation App")
+    st.title("AHP Multi-Lot Evaluation App with Transparency")
 
     # Sidebar: parameters
     st.sidebar.header("Parameters")
@@ -38,79 +38,105 @@ def main():
 
     st.markdown("---")
 
-    # Store results for download
-    all_results = {}
+    # Collect all results and transparency data
+    report_data = {}
 
     for idx, lot in enumerate(lot_names):
         st.header(f"Evaluation for {lot}")
-        stim_crit_matrix = np.ones((num_criteria, num_criteria))
+
+        # Criteria pairwise matrix
+        crit_matrix = np.ones((num_criteria, num_criteria))
         for i in range(num_criteria):
             for j in range(i+1, num_criteria):
-                key = f"lot{idx}_crit_{i}_{j}"
-                val = st.slider(f"Comparison {criterion_names[i]} vs {criterion_names[j]}",
+                val = st.slider(f"{criterion_names[i]} vs {criterion_names[j]}",
                                 min_value=1.0, max_value=9.0, value=1.0, step=0.5,
-                                key=key)
-                stim_crit_matrix[i, j] = val
-                stim_crit_matrix[j, i] = 1/val
-        crit_weights = compute_ahp_weights(stim_crit_matrix)
-        ci, cr, _ = consistency_ratio(stim_crit_matrix, crit_weights)
+                                key=f"crit_{idx}_{i}_{j}")
+                crit_matrix[i, j] = val
+                crit_matrix[j, i] = 1/val
 
-        st.subheader("Criterion Weights and Consistency")
-        st.table(pd.DataFrame({'Weight': crit_weights}, index=criterion_names))
-        st.write(f"CI: {ci:.4f}, CR: {cr:.4f}")
-        if cr > 0.1:
-            st.warning("CR > 0.1: revise judgments.")
+        geom_means, crit_weights = compute_ahp_weights(crit_matrix)
+        lamda_max, ci, cr = consistency_ratio(crit_matrix, crit_weights)
 
-        # Competitor comparisons per criterion
-        lot_df = pd.DataFrame(index=competitor_names)
+        # Display
+        st.subheader("Criterion Weights & Consistency")
+        st.write("**Comparison Matrix:**")
+        st.dataframe(pd.DataFrame(crit_matrix, index=criterion_names, columns=criterion_names))
+        st.write("**Geometric Means:**")
+        st.dataframe(pd.DataFrame(geom_means, index=criterion_names, columns=["GeomMean"]))
+        st.write("**Normalized Weights:**")
+        st.dataframe(pd.DataFrame(crit_weights, index=criterion_names, columns=["Weight"]))
+        st.write(f"\nλ_max: {lamda_max:.4f}, CI: {ci:.4f}, CR: {cr:.4f}")
+
+        # Competitor matrices per criterion
+        comp_results = {}
+        st.subheader("Competitor Evaluations per Criterion")
         for crit in criterion_names:
-            st.subheader(f"Competitor Comparison for {crit}")
+            st.write(f"\n**Criterion: {crit}**")
             comp_matrix = np.ones((num_competitors, num_competitors))
             for i in range(num_competitors):
                 for j in range(i+1, num_competitors):
-                    key = f"lot{idx}_{crit}_{i}_{j}"
+                    key = f"comp_{idx}_{crit}_{i}_{j}"
                     val = st.slider(f"{competitor_names[i]} vs {competitor_names[j]}",
                                     min_value=1.0, max_value=9.0, value=1.0, step=0.5,
                                     key=key)
                     comp_matrix[i, j] = val
                     comp_matrix[j, i] = 1/val
-            comp_weights = compute_ahp_weights(comp_matrix)
-            ci_c, cr_c, _ = consistency_ratio(comp_matrix, comp_weights)
-            lot_df[crit] = comp_weights
-            st.write(pd.DataFrame({'Weight': comp_weights}, index=competitor_names))
-            st.write(f"CI: {ci_c:.4f}, CR: {cr_c:.4f}")
-            if cr_c > 0.1:
-                st.warning(f"CR > 0.1 for {crit}: revise judgments.")
+            gm_comp, weights_comp = compute_ahp_weights(comp_matrix)
+            lamda_c, ci_c, cr_c = consistency_ratio(comp_matrix, weights_comp)
 
-        # Aggregate and show
+            st.write("Comparison Matrix:")
+            st.dataframe(pd.DataFrame(comp_matrix, index=competitor_names, columns=competitor_names))
+            st.write("Geom Means & Weights:")
+            df_comp = pd.DataFrame({'GeomMean': gm_comp, 'Weight': weights_comp}, index=competitor_names)
+            st.dataframe(df_comp)
+            st.write(f"λ_max: {lamda_c:.4f}, CI: {ci_c:.4f}, CR: {cr_c:.4f}")
+
+            comp_results[crit] = {
+                'matrix': pd.DataFrame(comp_matrix, index=competitor_names, columns=competitor_names),
+                'geom_mean_weight': df_comp,
+                'metrics': pd.Series({'lambda_max': lamda_c, 'CI': ci_c, 'CR': cr_c})
+            }
+
+        # Aggregate overall scores
+        overall_scores = pd.Series({name: sum(comp_results[crit]['geom_mean_weight'].loc[name,'Weight'] * crit_weights[i]
+                                               for i, crit in enumerate(criterion_names))
+                                    for name in competitor_names}, name='Overall Score')
         st.subheader("Overall Scores")
-        overall = lot_df.dot(pd.Series(crit_weights, index=criterion_names))
-        overall_df = pd.DataFrame({'Overall Score': overall})
-        st.table(overall_df.sort_values(by='Overall Score', ascending=False))
+        st.dataframe(overall_scores.sort_values(ascending=False))
 
-        # Save for download
-        all_results[lot] = {
-            'Criteria Weights': pd.DataFrame({'Weight': crit_weights}, index=criterion_names),
-            'Competitor Scores': lot_df,
-            'Overall Scores': overall_df
+        # Store all for report
+        report_data[lot] = {
+            'crit_matrix': pd.DataFrame(crit_matrix, index=criterion_names, columns=criterion_names),
+            'crit_geom': pd.DataFrame(geom_means, index=criterion_names, columns=['GeomMean']),
+            'crit_weight': pd.DataFrame(crit_weights, index=criterion_names, columns=['Weight']),
+            'crit_metrics': pd.Series({'lambda_max': lamda_max, 'CI': ci, 'CR': cr}),
+            'comp': comp_results,
+            'overall': overall_scores
         }
-        st.markdown("---")
 
-    # Download section
-    if all_results:
-        bytes_io = io.BytesIO()
-        # Create Excel writer and save sheets
-        with pd.ExcelWriter(bytes_io, engine='xlsxwriter') as writer:
-            for lot, dfs in all_results.items():
-                for sheet_name, df in dfs.items():
-                    df.to_excel(writer, sheet_name=f"{lot}_{sheet_name[:20]}")
-            # No explicit save(), context manager handles it
-        bytes_io.seek(0)
-
+    # Download report
+    if report_data:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+            for lot, data in report_data.items():
+                # Criteria sheets
+                data['crit_matrix'].to_excel(writer, sheet_name=f"{lot}_CritMatrix")
+                data['crit_geom'].to_excel(writer, sheet_name=f"{lot}_CritGeom")
+                data['crit_weight'].to_excel(writer, sheet_name=f"{lot}_CritWeight")
+                data['crit_metrics'].to_frame(name='Value').to_excel(writer, sheet_name=f"{lot}_CritMetrics")
+                # Competitor sheets per criterion
+                for crit, cr_data in data['comp'].items():
+                    safe = crit[:15]
+                    cr_data['matrix'].to_excel(writer, sheet_name=f"{lot}_{safe}_Mat")
+                    cr_data['geom_mean_weight'].to_excel(writer, sheet_name=f"{lot}_{safe}_GM_Wt")
+                    cr_data['metrics'].to_frame(name='Value').to_excel(writer, sheet_name=f"{lot}_{safe}_Metrics")
+                # Overall
+                data['overall'].to_frame(name='Score').to_excel(writer, sheet_name=f"{lot}_Overall")
+        buf.seek(0)
         st.download_button(
-            label="Download Excel Report",
-            data=bytes_io,
-            file_name="AHP_Report.xlsx",
+            label="Download Detailed Excel Report",
+            data=buf,
+            file_name="AHP_Detailed_Report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
