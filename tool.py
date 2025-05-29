@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
 
 # Utility functions for AHP
 
 def compute_ahp_weights(matrix: np.ndarray):
-    # geometric mean method
     geom_means = np.prod(matrix, axis=1) ** (1.0 / matrix.shape[1])
     weights = geom_means / geom_means.sum()
     return weights
@@ -13,10 +13,8 @@ def compute_ahp_weights(matrix: np.ndarray):
 
 def consistency_ratio(matrix: np.ndarray, weights: np.ndarray):
     n = matrix.shape[0]
-    # Consistency Index (CI)
     lamda_max = np.sum(np.dot(matrix, weights) / weights) / n
     ci = (lamda_max - n) / (n - 1)
-    # Random Index (RI) values for n
     RI_dict = {1:0.0, 2:0.0, 3:0.58, 4:0.90, 5:1.12, 6:1.24, 7:1.32, 8:1.41, 9:1.45, 10:1.49}
     ri = RI_dict.get(n, 1.49)
     cr = ci / ri if ri != 0 else 0
@@ -40,13 +38,11 @@ def main():
 
     st.markdown("---")
 
-    # For each lot, perform AHP
+    # Store results for download
+    all_results = {}
+
     for idx, lot in enumerate(lot_names):
         st.header(f"Evaluation for {lot}")
-        # Dictionary to hold criterion weights
-        crit_weights = {}
-        # Let user input pairwise comparisons for criteria
-        st.subheader("Pairwise Comparison: Criteria")
         crit_matrix = np.ones((num_criteria, num_criteria))
         for i in range(num_criteria):
             for j in range(i+1, num_criteria):
@@ -55,19 +51,17 @@ def main():
                                 key=f"lot{idx}_crit_{i}_{j}")
                 crit_matrix[i, j] = val
                 crit_matrix[j, i] = 1/val
-        crit_weights_array = compute_ahp_weights(crit_matrix)
-        ci, cr, lamda_max = consistency_ratio(crit_matrix, crit_weights_array)
-        crit_weights = dict(zip(criterion_names, crit_weights_array))
+        crit_weights = compute_ahp_weights(crit_matrix)
+        ci, cr, _ = consistency_ratio(crit_matrix, crit_weights)
 
-        st.write("**Criterion Weights:**")
-        st.table(pd.DataFrame.from_dict(crit_weights, orient='index', columns=["Weight"]))
-        st.write(f"Consistency Index (CI): {ci:.4f}")
-        st.write(f"Consistency Ratio (CR): {cr:.4f}")
+        st.subheader("Criterion Weights and Consistency")
+        st.table(pd.DataFrame({'Weight': crit_weights}, index=criterion_names))
+        st.write(f"CI: {ci:.4f}, CR: {cr:.4f}")
         if cr > 0.1:
-            st.warning("CR > 0.1: Consider revising judgments for consistency.")
+            st.warning("CR > 0.1: revise judgments.")
 
-        # Sub-evaluation per criterion: competitors
-        lot_result = pd.DataFrame(index=competitor_names)
+        # Competitor comparisons per criterion
+        lot_df = pd.DataFrame(index=competitor_names)
         for crit in criterion_names:
             st.subheader(f"Competitor Comparison for {crit}")
             comp_matrix = np.ones((num_competitors, num_competitors))
@@ -81,18 +75,42 @@ def main():
                     comp_matrix[j, i] = 1/val
             comp_weights = compute_ahp_weights(comp_matrix)
             ci_c, cr_c, _ = consistency_ratio(comp_matrix, comp_weights)
-            lot_result[crit] = comp_weights
-            st.write(pd.DataFrame({"Weight": comp_weights}, index=competitor_names))
+            lot_df[crit] = comp_weights
+            st.write(pd.DataFrame({'Weight': comp_weights}, index=competitor_names))
             st.write(f"CI: {ci_c:.4f}, CR: {cr_c:.4f}")
             if cr_c > 0.1:
-                st.warning(f"CR > 0.1 for criterion {crit}: revise your judgments.")
+                st.warning(f"CR > 0.1 for {crit}: revise judgments.")
 
-        # Aggregate results
+        # Aggregate and show
         st.subheader("Overall Scores")
-        overall = lot_result.dot(pd.Series(crit_weights))
-        overall_df = pd.DataFrame({"Overall Score": overall})
-        st.table(overall_df.sort_values(by="Overall Score", ascending=False))
+        overall = lot_df.dot(pd.Series(crit_weights, index=criterion_names))
+        overall_df = pd.DataFrame({'Overall Score': overall})
+        st.table(overall_df.sort_values(by='Overall Score', ascending=False))
+
+        # Save for download
+        all_results[lot] = {
+            'Criteria Weights': pd.DataFrame({'Weight': crit_weights}, index=criterion_names),
+            'Competitor Scores': lot_df,
+            'Overall Scores': overall_df
+        }
         st.markdown("---")
+
+    # Download section
+    if all_results:
+        bytes_io = io.BytesIO()
+        with pd.ExcelWriter(bytes_io, engine='xlsxwriter') as writer:
+            for lot, dfs in all_results.items():
+                for sheet_name, df in dfs.items():
+                    df.to_excel(writer, sheet_name=f"{lot}_{sheet_name[:20]}")
+            writer.save()
+            bytes_io.seek(0)
+
+        st.download_button(
+            label="Download Excel Report",
+            data=bytes_io,
+            file_name="AHP_Report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 if __name__ == '__main__':
     main()
