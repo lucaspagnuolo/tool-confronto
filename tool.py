@@ -43,16 +43,17 @@ def main():
 
     for idx, lot in enumerate(lot_names):
         st.header(f"Evaluation for {lot}")
-        crit_matrix = np.ones((num_criteria, num_criteria))
+        stim_crit_matrix = np.ones((num_criteria, num_criteria))
         for i in range(num_criteria):
             for j in range(i+1, num_criteria):
+                key = f"lot{idx}_crit_{i}_{j}"
                 val = st.slider(f"Comparison {criterion_names[i]} vs {criterion_names[j]}",
                                 min_value=1.0, max_value=9.0, value=1.0, step=0.5,
-                                key=f"lot{idx}_crit_{i}_{j}")
-                crit_matrix[i, j] = val
-                crit_matrix[j, i] = 1/val
-        crit_weights = compute_ahp_weights(crit_matrix)
-        ci, cr, _ = consistency_ratio(crit_matrix, crit_weights)
+                                key=key)
+                stim_crit_matrix[i, j] = val
+                stim_crit_matrix[j, i] = 1/val
+        crit_weights = compute_ahp_weights(stim_crit_matrix)
+        ci, cr, _ = consistency_ratio(stim_crit_matrix, crit_weights)
 
         st.subheader("Criterion Weights and Consistency")
         st.table(pd.DataFrame({'Weight': crit_weights}, index=criterion_names))
@@ -98,12 +99,13 @@ def main():
     # Download section
     if all_results:
         bytes_io = io.BytesIO()
+        # Create Excel writer and save sheets
         with pd.ExcelWriter(bytes_io, engine='xlsxwriter') as writer:
             for lot, dfs in all_results.items():
                 for sheet_name, df in dfs.items():
                     df.to_excel(writer, sheet_name=f"{lot}_{sheet_name[:20]}")
-            writer.save()
-            bytes_io.seek(0)
+            # No explicit save(), context manager handles it
+        bytes_io.seek(0)
 
         st.download_button(
             label="Download Excel Report",
