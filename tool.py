@@ -24,7 +24,6 @@ def consistency_ratio(matrix: np.ndarray, weights: np.ndarray):
     n = matrix.shape[0]
     lamda_max = np.sum(np.dot(matrix, weights) / weights) / n
     ci = (lamda_max - n) / (n - 1) if n > 1 else 0.0
-    # Valori RI tratti dalla macro (con qualche arrotondamento)
     RI_dict = {
         1: 0.0,   2: 0.0,   3: 0.489,  4: 0.805,  5: 1.059,
         6: 1.18,  7: 1.252, 8: 1.317, 9: 1.373, 10: 1.406,
@@ -89,23 +88,33 @@ def main():
     for idx, lot in enumerate(lot_names):
         st.header(f"Valutazione Lotto: **{lot}**")
 
-        # Per ciascun criterio, costruiamo una matrice AHP sui concorrenti
         comp_results = {}
         for i_crit, crit in enumerate(criterion_names):
             st.markdown(f"**Criterio {i_crit+1}: '{crit}'**")
 
-            # Matrice di confronto a coppie (n_concorr × n_concorr) inizializzata a 1
+            # Matrice di confronto a coppie inizializzata a 1
             comp_matrix = np.ones((num_competitors, num_competitors))
             for i in range(num_competitors):
                 for j in range(i+1, num_competitors):
                     slider_key = f"lot_{idx}_crit_{i_crit}_comp_{i}_{j}"
-                    val = st.slider(
+                    # Slider centrato da –8 a +8, default=0
+                    v = st.slider(
                         f"{competitor_names[i]} vs {competitor_names[j]}",
-                        min_value=1.0, max_value=9.0, value=1.0, step=0.5,
+                        min_value=-8, max_value=8, value=0, step=1,
                         key=slider_key
                     )
+                    if v > 0:
+                        val = 1.0 + v
+                        desc = f"Preferisco **{competitor_names[i]}** di **{val:.0f}×**"
+                    elif v < 0:
+                        val = 1.0 / (1.0 + abs(v))
+                        desc = f"Preferisco **{competitor_names[j]}** di **{1+abs(v):.0f}×**"
+                    else:
+                        val = 1.0
+                        desc = "Perfetto equilibrio"
                     comp_matrix[i, j] = val
                     comp_matrix[j, i] = 1.0 / val
+                    st.write(desc)
 
             # Calcolo pesi locali AHP e CR
             geom_comp, weights_comp = compute_ahp_weights(comp_matrix)
@@ -141,9 +150,7 @@ def main():
             }
 
         # --------------------------------------------------
-        # Una volta ottenuti i pesi locali per ogni criterio,
-        # calcolo il punteggio complessivo di ciascun concorrente:
-        #   OverallScore = Σ [ peso_locale(crit) * peso_criterio(normalizzato) ]
+        # Calcolo punteggi complessivi
         # --------------------------------------------------
         overall_scores = {}
         for c_name in competitor_names:
@@ -160,9 +167,6 @@ def main():
         st.subheader("Punteggi complessivi dei concorrenti")
         st.dataframe(series_overall.to_frame().style.format("{:.4f}"))
 
-        # ----------------------
-        # Salvo i dati per il report
-        # ----------------------
         report_data[lot] = {
             "criteri": {
                 "names": criterion_names,
@@ -177,14 +181,14 @@ def main():
         st.markdown("---")
 
     # =====================================
-    # Se ci sono risultati, attivo il download Excel “full-feature”
+    # Download Excel “full-feature”
     # =====================================
     if report_data:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
             workbook: "xlsxwriter.Workbook" = writer.book
 
-            # Formati di cella riutilizzabili
+            # Formati
             fmt_header = workbook.add_format({
                 "bold": True, "font_color": "#FFFFFF", "bg_color": "#4BACC6",
                 "align": "center", "valign": "vcenter", "border": 1
@@ -207,7 +211,7 @@ def main():
             fmt_bordo = workbook.add_format({"border": 1})
             fmt_bordo_center = workbook.add_format({"border": 1, "align": "center", "valign": "vcenter"})
 
-            # Foglio nascosto per lookup RI (1–15)
+            # Foglio nascosto RI
             ri_sheet = workbook.add_worksheet("RI_Lookup")
             ri_sheet.hide()
             ri_vals = {
@@ -223,9 +227,9 @@ def main():
                 ri_sheet.write(riga, 1, ri_val)
                 riga += 1
 
-            # Per ogni lotto, creiamo un foglio “LottoX” con layout completo
+            # Fogli per lotto
             for lot, data in report_data.items():
-                worksheet: "xlsxwriter.Worksheet" = workbook.add_worksheet(f"{lot}")
+                worksheet = workbook.add_worksheet(f"{lot}")
                 worksheet.protect(options={
                     "insert_rows": False, "insert_columns": False,
                     "format_cells": False, "format_columns": False,
@@ -233,201 +237,103 @@ def main():
                     "delete_columns": False, "sort": False, "autofilter": False
                 })
 
-                # Larghezze colonne
                 worksheet.set_column("A:A", 20)
                 worksheet.set_column("B:C", 15)
                 worksheet.set_column("D:Z", 12)
 
-                # ===============================
-                # 1) Titoli e parametri in alto
-                # ===============================
-                # RIGA 2: Titolo Iniziativa
+                # Parametri in alto
                 worksheet.merge_range("A2:C2", "Titolo Iniziativa:", fmt_title)
                 worksheet.write("D2", lot, fmt_locked)
-
-                # RIGA 3: Num Criteri
                 worksheet.write("A3", "Num Criteri:", fmt_label)
                 worksheet.write("B3", len(data["criteri"]["names"]), fmt_locked)
-
-                # RIGA 4: Num Concorrenti
                 worksheet.write("A4", "Num Concorrenti:", fmt_label)
                 worksheet.write("B4", len(data["competitors"]), fmt_locked)
-
-                # RIGA 6–7: istruzioni testuali
                 worksheet.write("A6", "1) Inserisci ID Criterio e PTmax nelle corrispondenti celle.", fmt_bordo)
                 worksheet.write("A7", "2) Inserisci la valutazione di ogni coppia di offerte nelle celle gialle.", fmt_bordo)
 
-                # ===============================
-                # 2) Area ID Criterio e PTmax (riga 8–9…)
-                # ===============================
+                # ID Criteri e PTmax
                 crit_names = data["criteri"]["names"]
                 ptmax_list = data["criteri"]["ptmax"]
                 worksheet.write("A8", "ID Criterio", fmt_header)
                 worksheet.write("B8", "PTmax", fmt_header)
                 for j, crit in enumerate(crit_names):
-                    worksheet.write(8 + j + 1, 0, crit, fmt_bordo)
-                    worksheet.write(8 + j + 1, 1, ptmax_list[j], fmt_input)
+                    worksheet.write(9 + j, 0, crit, fmt_bordo)
+                    worksheet.write(9 + j, 1, ptmax_list[j], fmt_input)
 
-                # ================================================
-                # 3) Per ogni criterio: creiamo il blocco AHP passo-passo
-                # ================================================
+                # Blocchi AHP per criterio
                 num_c = len(crit_names)
                 num_k = len(data["competitors"])
                 competitors = data["competitors"]
-                blocco_start = 8 + num_c + 2
+                blocco_start = 9 + num_c + 2
 
                 for i_crit, crit in enumerate(crit_names):
                     r0 = blocco_start + i_crit * (num_k + 8)
 
-                    # ------------------------------
-                    # 3.1) Nome criterio come header
-                    # ------------------------------
                     worksheet.merge_range(r0, 0, r0, 1, f"Criterio: {crit}", fmt_title)
-
-                    # ------------------------------
-                    # 3.2) Intestazioni competitor
-                    # ------------------------------
                     worksheet.write(r0 + 1, 0, "Concorrente", fmt_header)
                     for j in range(num_k):
                         worksheet.write(r0 + 1, 1 + j, competitors[j], fmt_header)
                     for i in range(num_k):
                         worksheet.write(r0 + 1 + i + 1, 0, competitors[i], fmt_header)
 
-                    # ------------------------------
-                    # 3.3) Celle input: matrice di confronto a coppie
-                    # ------------------------------
                     matrix = data["comp_results"][crit]["matrix"].values
                     for i in range(num_k):
                         for j in range(num_k):
-                            cell_fmt = fmt_locked
-                            val = matrix[i, j]
                             if j > i:
                                 cell_fmt = fmt_input
-                            elif j == i:
-                                cell_fmt = fmt_locked
-                                val = 1.0
                             else:
                                 cell_fmt = fmt_locked
+                            val = matrix[i, j]
                             worksheet.write(r0 + 1 + i + 1, 1 + j, val, cell_fmt)
 
-                    # ------------------------------
-                    # 3.4) Geometric Means (colonna dopo matrice)
-                    # ------------------------------
+                    # GeomMean & PesoLocale
                     col_geom = 1 + num_k + 1
-                    worksheet.write(r0 + 1, col_geom, "GeomMean", fmt_header)
-                    for i in range(num_k):
-                        riga_formula = r0 + 1 + i + 1
-                        start_col = 1
-                        end_col = 1 + num_k - 1
-                        cell_range = xlsxwriter.utility.xl_range(riga_formula, start_col,
-                                                                 riga_formula, end_col)
-                        formula = f"=GEOMEAN({cell_range})"
-                        worksheet.write_formula(riga_formula, col_geom, formula, fmt_locked)
-
-                    # ------------------------------
-                    # 3.5) Normalizzazione pesi locali
-                    # ------------------------------
                     col_wloc = col_geom + 1
+                    worksheet.write(r0 + 1, col_geom, "GeomMean", fmt_header)
                     worksheet.write(r0 + 1, col_wloc, "PesoLocale", fmt_header)
                     geom_start = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2, col_geom)
                     geom_end   = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k, col_geom)
                     for i in range(num_k):
-                        riga_formula = r0 + 1 + i + 1
-                        cell_gi = xlsxwriter.utility.xl_rowcol_to_cell(riga_formula, col_geom)
-                        formula = f"=IFERROR({cell_gi}/SUM({geom_start}:{geom_end}); 0)"
-                        worksheet.write_formula(riga_formula, col_wloc, formula, fmt_locked)
+                        riga = r0 + 1 + i + 1
+                        formula_g = f"=GEOMEAN({xlsxwriter.utility.xl_range(riga,1,riga,1+num_k-1)})"
+                        worksheet.write_formula(riga, col_geom, formula_g, fmt_locked)
+                        formula_w = f"=IFERROR({xlsxwriter.utility.xl_rowcol_to_cell(riga,col_geom)}/SUM({geom_start}:{geom_end}),0)"
+                        worksheet.write_formula(riga, col_wloc, formula_w, fmt_locked)
 
-                    # ------------------------------
-                    # 3.6) λ_max, CI e CR
-                    # ------------------------------
+                    # λ_max, CI, CR (e formato condizionale)
                     label_lambda = r0 + 1 + num_k + 2
+                    label_ci     = label_lambda + 1
+                    label_cr     = label_lambda + 2
+                    mat_start = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2,1)
+                    mat_end   = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k,1+num_k-1)
+                    wloc_start= xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2,col_wloc)
+                    wloc_end  = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k,col_wloc)
+
                     worksheet.write(label_lambda, 0, "λ_max", fmt_label)
-                    mat_start = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2, 1)
-                    mat_end   = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k, 1 + num_k - 1)
-                    wloc_start = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2, col_wloc)
-                    wloc_end   = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k, col_wloc)
-                    formula_lambda = f"=SUMPRODUCT({mat_start}:{mat_end}, {wloc_start}:{wloc_end})/{num_k}"
-                    worksheet.write_formula(label_lambda, 1, formula_lambda, fmt_locked)
-
-                    label_ci = label_lambda + 1
+                    worksheet.write_formula(label_lambda, 1,
+                        f"=SUMPRODUCT({mat_start}:{mat_end},{wloc_start}:{wloc_end})/{num_k}", fmt_locked)
                     worksheet.write(label_ci, 0, "CI", fmt_label)
-                    cell_lam = xlsxwriter.utility.xl_rowcol_to_cell(label_lambda, 1)
-                    formula_ci = f"=IF({num_k}>1;({cell_lam}-{num_k})/({num_k}-1);0)"
-                    worksheet.write_formula(label_ci, 1, formula_ci, fmt_locked)
-
-                    label_cr = label_lambda + 2
+                    worksheet.write_formula(label_ci, 1,
+                        f"=IF({num_k}>1,({xlsxwriter.utility.xl_rowcol_to_cell(label_lambda,1)}-{num_k})/({num_k}-1),0)", fmt_locked)
                     worksheet.write(label_cr, 0, "CR", fmt_label)
-                    formula_ri = f"=VLOOKUP({num_k}, RI_Lookup!$A:$B, 2, FALSE)"
-                    cell_ci = xlsxwriter.utility.xl_rowcol_to_cell(label_ci, 1)
-                    formula_cr = f"=IFERROR({cell_ci}/{formula_ri}, 0)"
-                    worksheet.write_formula(label_cr, 1, formula_cr, fmt_locked)
+                    worksheet.write_formula(label_cr, 1,
+                        f"=IFERROR({xlsxwriter.utility.xl_rowcol_to_cell(label_ci,1)}/VLOOKUP({num_k},RI_Lookup!$A:$B,2,FALSE),0)", fmt_locked)
 
-                    # Conditional Formatting su CR
                     cell_cr = xlsxwriter.utility.xl_rowcol_to_cell(label_cr, 1)
                     worksheet.conditional_format(cell_cr, {
-                        "type":     "cell",
-                        "criteria": ">",
-                        "value":    0.1,
-                        "format":   workbook.add_format({"bg_color": "#FFC7CE", "font_color": "#9C0006"})
+                        "type":"cell","criteria":">","value":0.1,
+                        "format":workbook.add_format({"bg_color":"#FFC7CE","font_color":"#9C0006"})
                     })
                     worksheet.conditional_format(cell_cr, {
-                        "type":     "cell",
-                        "criteria": "<=",
-                        "value":    0.1,
-                        "format":   workbook.add_format({"bg_color": "#C6EFCE", "font_color": "#006100"}),
-                        "criteria_range": f"=AND({cell_cr}>0, {cell_cr}<=0.1)"
-                    })
-                    worksheet.conditional_format(cell_cr, {
-                        "type":     "cell",
-                        "criteria": "==",
-                        "value":    0,
-                        "format":   workbook.add_format({"bg_color": "#EDEDED", "font_color": "#666666"})
+                        "type":"cell","criteria":"<=","value":0.1,
+                        "format":workbook.add_format({"bg_color":"#C6EFCE","font_color":"#006100"})
                     })
 
-                    # ------------------------------
-                    # 3.7) Coeff. Provvisorio e Coeff. Definitivo
-                    # ------------------------------
-                    base_ptmax_cell = xlsxwriter.utility.xl_rowcol_to_cell(8 + i_crit + 1, 1)
-                    pt_start = xlsxwriter.utility.xl_rowcol_to_cell(9, 1)
-                    pt_end   = xlsxwriter.utility.xl_rowcol_to_cell(8 + num_c, 1)
-
-                    col_cp = col_wloc + 2
-                    worksheet.write(r0 + 1, col_cp, "Coeff. Provv.", fmt_header)
-                    col_cd = col_cp + 1
-                    worksheet.write(r0 + 1, col_cd, "Coeff. Definitivo", fmt_header)
-
-                    for i in range(num_k):
-                        riga_wloc = r0 + 1 + i + 1
-                        cell_wloc = xlsxwriter.utility.xl_rowcol_to_cell(riga_wloc, col_wloc)
-                        worksheet.write_formula(riga_wloc, col_cp, f"={cell_wloc}", fmt_locked)
-
-                        formula_ptnorm = f"={base_ptmax_cell}/SUM({pt_start}:{pt_end})"
-                        cell_cp = xlsxwriter.utility.xl_rowcol_to_cell(riga_wloc, col_cp)
-                        formula_cd = f"={cell_cp}*({formula_ptnorm})"
-                        worksheet.write_formula(riga_wloc, col_cd, formula_cd, fmt_locked)
-
-                    # ------------------------------
-                    # 3.8) Yi (somma dei Coeff. Definitivi)
-                    # ------------------------------
-                    col_yi = col_cd + 1
-                    worksheet.write(r0 + 1, col_yi, "Yi", fmt_header)
-                    yi_start = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 2, col_cd)
-                    yi_end   = xlsxwriter.utility.xl_rowcol_to_cell(r0 + 1 + num_k, col_cd)
-                    for i in range(num_k):
-                        riga_yi = r0 + 1 + i + 1
-                        formula_yi = f"=SUM({yi_start}:{yi_end})"
-                        worksheet.write_formula(riga_yi, col_yi, formula_yi, fmt_locked)
-
-                    # --------------------------------------------------------
-                    # 3.9) Protezione finale: le celle di input restano sbloccate
-                    # Già abbiamo usato fmt_input su (j>i) e sulle celle PTmax.
-                    # --------------------------------------------------------
+                    # Protezione finale
                     worksheet.protect(options={
                         "select_locked_cells": False,
                         "select_unlocked_cells": True
                     })
-
-                # Fine ciclo criteri
 
             writer.close()
             buf.seek(0)
