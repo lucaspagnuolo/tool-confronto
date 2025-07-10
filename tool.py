@@ -100,7 +100,7 @@ def main():
                     # Slider centrato da –8 a +8, default=0
                     v = st.slider(
                         f"{competitor_names[i]} vs {competitor_names[j]}",
-                        min_value=-8, max_value=8, value=0, step=1,
+                        min_value=-8.0, max_value=8.0, value=0.0, step=0.5,
                         key=slider_key
                     )
                     if v > 0:
