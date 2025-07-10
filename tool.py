@@ -105,10 +105,10 @@ def main():
                     )
                     if v > 0:
                         val = 1.0 + v
-                        desc = f"Preferisco **{competitor_names[i]}** di **{val:.0f}×**"
+                        desc = f"Preferisco **{competitor_names[i]}** di **{val:.1f}×**"
                     elif v < 0:
                         val = 1.0 / (1.0 + abs(v))
-                        desc = f"Preferisco **{competitor_names[j]}** di **{1+abs(v):.0f}×**"
+                        desc = f"Preferisco **{competitor_names[j]}** di **{(1+abs(v)):.1f}×**"
                     else:
                         val = 1.0
                         desc = "Perfetto equilibrio"
